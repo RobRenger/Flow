@@ -149,6 +149,9 @@ class Media3MusicService : MediaLibraryService() {
     }
 
     private lateinit var mediaLibrarySession: MediaLibrarySession
+
+    /** Moves the session to a Cast speaker or group and back. */
+    private var castHandover: MusicCastHandover? = null
     private lateinit var player: ExoPlayer
     private val equalizer = EqualizerAudioProcessor()
     private val musicAudioAttributes =
@@ -1271,6 +1274,10 @@ class Media3MusicService : MediaLibraryService() {
                 .setBitmapLoader(sessionArtworkBitmapLoader(this))
                 .build()
 
+        castHandover =
+            MusicCastHandover(this, mediaLibrarySession, player, ::offloadResumingPlayer)
+                .also { it.attach(lifecycleScope) }
+
         setMediaNotificationProvider(CustomNotificationProvider())
 
         updateNotification()
@@ -1312,6 +1319,7 @@ class Media3MusicService : MediaLibraryService() {
      */
     @OptIn(UnstableApi::class)
     override fun onTaskRemoved(rootIntent: Intent?) {
+        if (castHandover?.isCasting == true) return
         if (::player.isInitialized && player.keepsPlayingOnTaskRemoved(isPlaybackOngoing())) {
             return
         }
@@ -1340,6 +1348,11 @@ class Media3MusicService : MediaLibraryService() {
 
         pendingRetryJob?.cancel()
 
+        castHandover?.release()
+        castHandover = null
+        io.github.aedev.flow.player.cast.CastController
+            .stopCasting()
+
         if (::mediaLibrarySession.isInitialized) {
             mediaLibrarySession.release()
         }
@@ -1360,6 +1373,8 @@ class Media3MusicService : MediaLibraryService() {
     }
 
     private fun isPlaybackActive(): Boolean {
+        // The phone's own player sits paused while a speaker plays, and the service must stay.
+        if (castHandover?.isCasting == true) return true
         if (!::player.isInitialized) return false
         return player.isPlaying ||
             player.playbackState == Player.STATE_BUFFERING ||

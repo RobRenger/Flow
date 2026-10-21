@@ -1,5 +1,6 @@
 package io.github.aedev.flow.ui.components.musicplayer.full
 
+import io.github.aedev.flow.ui.components.musicplayer.CastSpeakerButton
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
@@ -259,6 +260,7 @@ internal fun FullMusicPlayerContent(
                             } else {
                                 null
                             },
+                        actions = { CastSpeakerButton(contentColor = colorScheme.onSurface) },
                     )
                 },
                 artwork = { modifier ->

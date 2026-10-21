@@ -2,6 +2,7 @@ package io.github.aedev.flow.ui.components.musicplayer.full
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -29,6 +30,7 @@ fun PlayerTopBar(
     modifier: Modifier = Modifier,
     contentColor: Color = Color.White,
     modeSwitch: (@Composable () -> Unit)? = null,
+    actions: @Composable RowScope.() -> Unit = {},
 ) {
     CenterAlignedTopAppBar(
         title = {
@@ -57,6 +59,7 @@ fun PlayerTopBar(
                 }
             }
         },
+        actions = actions,
         colors =
             TopAppBarDefaults.centerAlignedTopAppBarColors(
                 containerColor = Color.Transparent,

@@ -140,6 +140,9 @@ class StreamProxyServer private constructor() {
         }
     }
 
+    /** Whether [start] has finished opening the server socket. */
+    fun isStarted(): Boolean = isRunning.get()
+
     /**
      * Stops the proxy server and clears all registered streams.
      */

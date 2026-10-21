@@ -2516,6 +2516,13 @@
     <string name="dlna_searching">Searching for DLNA devices...</string>
     <string name="dlna_now_casting">Now casting: %1$s</string>
     <string name="dlna_stop_casting">Stop Casting</string>
+    <string name="cast_music_to_speaker">Play on a speaker</string>
+    <string name="cast_searching_speakers">Looking for speakers and speaker groups…</string>
+    <string name="cast_no_speakers">No Google Cast speakers found.\n\nMake sure the phone is on the same Wi-Fi network as your speakers.</string>
+    <string name="cast_speaker_group">Speaker group</string>
+    <string name="cast_connecting_to">Connecting to %1$s…</string>
+    <string name="cast_playing_on">Playing on %1$s</string>
+    <string name="cast_failed">Could not play on %1$s. Music is back on this phone.</string>
     <!-- Subtitle customization -->
     <string name="subtitle_customization_title">Subtitle Customization</string>
     <string name="subtitle_preview_text">Preview Subtitle Text</string>
