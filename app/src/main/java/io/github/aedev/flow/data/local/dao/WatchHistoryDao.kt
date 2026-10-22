@@ -23,6 +23,21 @@ interface WatchHistoryDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(entries: List<WatchHistoryEntity>)
 
+    /**
+     * Moves each row that is still an import stub (no position or duration saved) back to the older
+     * time [times] gives for it. A row that was played keeps its own time.
+     */
+    @Transaction
+    suspend fun backdateStubs(times: Map<String, Long>) {
+        times.forEach { (videoId, timestamp) -> backdateStub(videoId, timestamp) }
+    }
+
+    @Query("UPDATE watch_history SET timestamp = :timestamp WHERE videoId = :videoId AND position = 0 AND duration = 0 AND timestamp > :timestamp")
+    suspend fun backdateStub(
+        videoId: String,
+        timestamp: Long,
+    )
+
     @Query("DELETE FROM watch_history WHERE videoId = :videoId")
     suspend fun deleteEntry(videoId: String)
 

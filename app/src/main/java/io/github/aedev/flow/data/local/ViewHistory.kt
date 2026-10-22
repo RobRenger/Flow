@@ -199,6 +199,14 @@ class ViewHistory private constructor(
         dao.insertAll(entities)
     }
 
+    /**
+     * Gives imported rows that never played the older watch time a fresh import found for them, so a
+     * history first imported without its dates gets them back on the next import.
+     */
+    suspend fun backdateImportedEntries(times: Map<String, Long>) {
+        if (times.isNotEmpty()) dao.backdateStubs(times)
+    }
+
     suspend fun clearVideoHistory(videoId: String) {
         dao.deleteEntry(videoId)
     }

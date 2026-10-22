@@ -5,9 +5,13 @@ import java.io.Reader
 // Every Takeout activity entry sits in this cell, whatever language the archive is in.
 private const val TAKEOUT_ACTIVITY_MARKUP = "content-cell"
 private const val READ_SIZE = 65_536
-private const val OVERLAP = 2_048
+
+// A link this close to the end of what was read waits for the next read, so its channel and date are in view.
+private const val OVERLAP = 8_192
 private const val BATCH_SIZE = 500
 private const val CHANNEL_LINK_REACH = 2_000
+private const val DATE_REACH = 2_000
+private const val CELL_END = "</div>"
 
 private val watchLinkPattern =
     Regex("""href="https://(www|music)\.youtube\.com/watch\?v=([\w-]{10,12})"[^>]*?>([^<]+)</a>""", RegexOption.IGNORE_CASE)
@@ -24,6 +28,8 @@ internal data class TakeoutWatch(
     val channelId: String,
     val watchedAt: Long,
     val isMusic: Boolean,
+    /** False when the file gave no readable date and [watchedAt] only keeps Takeout's order. */
+    val dated: Boolean = true,
 )
 
 /** What a Takeout activity HTML file held. [watches] counts what was handed to the batch callback. */
@@ -35,8 +41,9 @@ internal data class TakeoutHtmlActivity(
 /**
  * Streams a Takeout activity HTML file, handing the videos watched on YouTube and YouTube Music to
  * [onWatches] in batches and keeping the searches. Takeout names the watch and search history files
- * in the account's language, so both are read from every file. Neither carries a date Flow can read
- * in every language, so entries are stamped newest first from [now], as Takeout lists them. With
+ * in the account's language, so both are read from every file. Each entry keeps the date Takeout
+ * wrote under it ([takeoutEntryTime]). An entry without a readable date is stamped from [now] down,
+ * newest first as Takeout lists them, so it still sorts above the dated ones. With
  * [requireActivityMarkup], a file that never shows the My Activity layout gives nothing, so other
  * HTML in the archive is ignored.
  */
@@ -51,7 +58,8 @@ internal suspend fun readTakeoutHtmlActivity(
     val batch = mutableListOf<TakeoutWatch>()
     val searches = mutableListOf<TakeoutSearch>()
     val buffer = CharArray(READ_SIZE)
-    val tail = StringBuilder(OVERLAP)
+    var carry = ""
+    var ended = false
 
     suspend fun flush() {
         if (batch.isEmpty()) return
@@ -59,18 +67,35 @@ internal suspend fun readTakeoutHtmlActivity(
         batch.clear()
     }
 
-    while (true) {
+    // The cell text after a link, where Takeout puts the channel and the date.
+    fun cellAfter(
+        window: String,
+        from: Int,
+        nextLink: Int,
+    ): String {
+        val end = minOf(window.length, nextLink, from + DATE_REACH)
+        val cell = window.substring(minOf(from, end), end)
+        val close = cell.indexOf(CELL_END)
+        return if (close >= 0) cell.substring(0, close) else cell
+    }
+
+    while (!ended) {
         val count = reader.read(buffer)
-        if (count == -1) break
-        val window = tail.toString() + String(buffer, 0, count)
+        ended = count == -1
+        val window = if (ended) carry else carry + String(buffer, 0, count)
         if (!markupSeen) markupSeen = window.contains(TAKEOUT_ACTIVITY_MARKUP)
+        // Links that start from here on are read in the next round.
+        val limit = if (ended) window.length else maxOf(0, window.length - OVERLAP)
 
         val channels = channelLinkPattern.findAll(window).toList()
+        val watches = watchLinkPattern.findAll(window).toList()
         var channelIndex = 0
-        for (match in watchLinkPattern.findAll(window)) {
-            if (match.range.last < tail.length) continue
+        for ((i, match) in watches.withIndex()) {
+            if (match.range.first >= limit) break
             while (channelIndex < channels.size && channels[channelIndex].range.first <= match.range.first) channelIndex++
             val channel = channels.getOrNull(channelIndex)?.takeIf { it.range.first - match.range.last < CHANNEL_LINK_REACH }
+            val nextLink = watches.getOrNull(i + 1)?.range?.first ?: window.length
+            val at = takeoutEntryTime(cellAfter(window, match.range.last + 1, nextLink))
             batch +=
                 TakeoutWatch(
                     videoId = match.groupValues[2].trim(),
@@ -88,19 +113,22 @@ internal suspend fun readTakeoutHtmlActivity(
                             ?.get(1)
                             ?.trim()
                             .orEmpty(),
-                    watchedAt = now - (watched + batch.size),
+                    watchedAt = at ?: (now - (watched + batch.size)),
                     isMusic = match.groupValues[1].equals("music", ignoreCase = true),
+                    dated = at != null,
                 )
         }
 
-        for (match in searchLinkPattern.findAll(window)) {
-            if (match.range.last < tail.length) continue
+        val searchLinks = searchLinkPattern.findAll(window).toList()
+        for ((i, match) in searchLinks.withIndex()) {
+            if (match.range.first >= limit) break
             val (query, isMusic) = takeoutSearchOf(match.groupValues[1].unescapedHtml()) ?: continue
-            searches += TakeoutSearch(query, now - searches.size, isMusic)
+            val nextLink = searchLinks.getOrNull(i + 1)?.range?.first ?: window.length
+            val at = takeoutEntryTime(cellAfter(window, match.range.last + 1, nextLink))
+            searches += TakeoutSearch(query, at ?: (now - searches.size), isMusic)
         }
 
-        tail.clear()
-        tail.append(window, maxOf(0, window.length - OVERLAP), window.length)
+        carry = window.substring(limit)
         if (markupSeen && batch.size >= BATCH_SIZE) {
             watched += batch.size
             flush()

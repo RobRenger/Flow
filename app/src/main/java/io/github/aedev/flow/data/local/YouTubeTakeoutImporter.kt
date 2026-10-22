@@ -225,6 +225,10 @@ internal class YouTubeTakeoutImporter(
         if (watches.isEmpty()) return
         val entries = watches.map { it.toHistoryEntry() }
         viewHistory.bulkSaveHistoryEntries(entries)
+        // Takeout lists the newest watch of a video first, so the first date seen for it wins.
+        val dated = LinkedHashMap<String, Long>()
+        watches.filter { it.dated }.forEach { dated.putIfAbsent(it.videoId, it.watchedAt) }
+        viewHistory.backdateImportedEntries(dated)
         watches.filter { it.isMusic }.mapTo(found.musicVideoIds) { it.videoId }
         entries.forEach { entry ->
             if (found.learnable.size < NEURO_CANDIDATE_LIMIT && entry.title.isNotBlank()) found.learnable.putIfAbsent(entry.videoId, entry)
