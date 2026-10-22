@@ -32,7 +32,8 @@ import kotlin.math.roundToInt
  * hardware volume keys work as they do for local playback.
  *
  * The phone serves the audio through its stream proxy, so it holds a wake lock and a Wi-Fi lock
- * while casting.
+ * while a track plays or loads on the speaker. Paused, stopped or at the end of the queue it lets
+ * them go, as local playback does.
  */
 @OptIn(UnstableApi::class)
 internal class CastPlayer(
@@ -74,6 +75,7 @@ internal class CastPlayer(
     private var lastFinishedSessionId: Int? = null
     private var ready = false
     private var released = false
+    private var locksHeld = false
 
     private val wakeLock =
         (context.applicationContext.getSystemService(Context.POWER_SERVICE) as PowerManager)
@@ -116,7 +118,6 @@ internal class CastPlayer(
         )
 
     init {
-        acquireLocks()
         connection.open()
     }
 
@@ -126,6 +127,9 @@ internal class CastPlayer(
     fun snapshot(): Triple<List<MediaItem>, Int, Long> = Triple(items.toList(), index, currentPositionMs())
 
     override fun getState(): State {
+        // Every state change passes through here, so the locks follow playback without a call at
+        // each place that changes it.
+        updateLocks()
         val playlist =
             items.mapIndexed { i, item ->
                 MediaItemData
@@ -453,13 +457,24 @@ internal class CastPlayer(
         invalidateState()
     }
 
-    @SuppressLint("WakelockTimeout") // Held for exactly as long as the cast session lasts.
+    private fun updateLocks() {
+        val busy =
+            !released && playWhenReady &&
+                (playbackState == Player.STATE_READY || playbackState == Player.STATE_BUFFERING)
+        if (busy) acquireLocks() else releaseLocks()
+    }
+
+    @SuppressLint("WakelockTimeout") // Released as soon as playback pauses, stops or ends.
     private fun acquireLocks() {
+        if (locksHeld) return
+        locksHeld = true
         runCatching { wakeLock.acquire() }
         runCatching { wifiLock.acquire() }
     }
 
     private fun releaseLocks() {
+        if (!locksHeld) return
+        locksHeld = false
         runCatching { if (wakeLock.isHeld) wakeLock.release() }
         runCatching { if (wifiLock.isHeld) wifiLock.release() }
     }

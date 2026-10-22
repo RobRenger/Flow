@@ -21,6 +21,14 @@ class StreamProxyServerTest {
     }
 
     @Test
+    fun `stream paths carry 128 random bits`() {
+        val ids = List(100) { StreamProxyServer.randomPathId() }
+        assertThat(ids.map { it.length }.toSet()).containsExactly(32)
+        assertThat(ids.all { id -> id.all { it in '0'..'9' || it in 'a'..'f' } }).isTrue()
+        assertThat(ids.toSet()).hasSize(100)
+    }
+
+    @Test
     fun `unknown content types fall back to mp4`() {
         assertThat(StreamProxyServer.segmentFileExtension("")).isEqualTo("mp4")
         assertThat(StreamProxyServer.segmentFileExtension("application/octet-stream")).isEqualTo("mp4")

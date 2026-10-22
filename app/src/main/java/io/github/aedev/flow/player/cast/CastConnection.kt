@@ -83,6 +83,20 @@ internal class CastConnection(
     @Volatile var mediaSessionId: Int? = null
         private set
 
+    /**
+     * Media session ids only grow. Statuses at or below the floor are late news about a track
+     * that a newer LOAD replaced, and must not bring its id back.
+     */
+    @Volatile private var lastMediaSessionId = 0
+
+    @Volatile private var staleMediaFloor = 0
+
+    /** The request id of the current LOAD; only its refusal means the track failed. */
+    @Volatile private var loadRequestId: Int? = null
+
+    /** Set by [stopAndClose] before the receiver confirmed the launch: stop the app once it does. */
+    @Volatile private var stopWhenLaunched = false
+
     private val closed = AtomicBoolean(false)
     private var heartbeat: Job? = null
 
@@ -91,10 +105,19 @@ internal class CastConnection(
             try {
                 val tls = SSLContext.getInstance("TLS").apply { init(null, arrayOf(AcceptAnyCertificate), SecureRandom()) }
                 val s = tls.socketFactory.createSocket() as SSLSocket
+                // Published before connecting, so a close() during connect or handshake closes it.
+                socket = s
+                if (closed.get()) {
+                    runCatching { s.close() }
+                    return@launch
+                }
                 s.connect(InetSocketAddress(device.host, device.port), CONNECT_TIMEOUT_MS)
                 s.soTimeout = READ_TIMEOUT_MS
                 s.startHandshake()
-                socket = s
+                if (closed.get()) {
+                    runCatching { s.close() }
+                    return@launch
+                }
                 output = DataOutputStream(s.outputStream)
 
                 send(NS_CONNECTION, RECEIVER_ID, JSONObject().put("type", "CONNECT"))
@@ -134,8 +157,11 @@ internal class CastConnection(
                 .put("contentType", stream.contentType)
                 .put("metadata", metadata)
         mediaSessionId = null
+        staleMediaFloor = lastMediaSessionId
+        val loadRequest = request("LOAD")
+        loadRequestId = loadRequest.getInt("requestId")
         sendMedia(
-            request("LOAD")
+            loadRequest
                 .put("sessionId", appSessionId)
                 .put("media", media)
                 .put("autoplay", autoplay)
@@ -164,8 +190,14 @@ internal class CastConnection(
 
     /** Stops the receiver app so the speaker goes quiet, then closes the socket. */
     fun stopAndClose() {
+        stopWhenLaunched = true
         scope.launch {
-            appSessionId?.let { send(NS_RECEIVER, RECEIVER_ID, request("STOP").put("sessionId", it)) }
+            val session = appSessionId
+            when {
+                session != null -> send(NS_RECEIVER, RECEIVER_ID, request("STOP").put("sessionId", session))
+                // LAUNCH is out but unanswered: give the receiver a moment to report the app.
+                output != null -> delay(LAUNCH_STOP_WAIT_MS)
+            }
             close(null)
         }
     }
@@ -231,8 +263,10 @@ internal class CastConnection(
             "RECEIVER_STATUS" -> handleReceiverStatus(json.optJSONObject("status") ?: return)
             "MEDIA_STATUS" -> {
                 val status = json.optJSONArray("status")?.optJSONObject(0) ?: return
-                mediaSessionId = status.optInt("mediaSessionId").takeIf { it != 0 } ?: mediaSessionId
-                val id = mediaSessionId ?: return
+                val id = status.optInt("mediaSessionId")
+                if (id <= staleMediaFloor) return
+                lastMediaSessionId = maxOf(lastMediaSessionId, id)
+                mediaSessionId = id
                 listener.onMediaStatus(
                     CastMediaStatus(
                         mediaSessionId = id,
@@ -243,8 +277,15 @@ internal class CastConnection(
                     ),
                 )
             }
-            "LOAD_FAILED", "LOAD_CANCELLED", "INVALID_REQUEST" ->
-                listener.onMediaStatus(CastMediaStatus(mediaSessionId ?: 0, "IDLE", "ERROR", 0.0, null))
+            // A refused PAUSE, SEEK or SET_VOLUME, or LOAD_CANCELLED for a load the next one
+            // replaced, says nothing about the current track.
+            "LOAD_FAILED", "INVALID_REQUEST" ->
+                if (loadRequestId != null && json.optInt("requestId", -1) == loadRequestId) {
+                    loadRequestId = null
+                    listener.onMediaStatus(CastMediaStatus(0, "IDLE", "ERROR", 0.0, null))
+                } else {
+                    Log.d(TAG, "Receiver rejected a request: $json")
+                }
             "LAUNCH_ERROR" -> close(IllegalStateException("Receiver refused to launch: $json"))
         }
     }
@@ -271,6 +312,11 @@ internal class CastConnection(
             return
         }
         appSessionId = newSession
+        if (stopWhenLaunched) {
+            send(NS_RECEIVER, RECEIVER_ID, request("STOP").put("sessionId", newSession))
+            close(null)
+            return
+        }
         transportId = app.optString("transportId")
         send(NS_CONNECTION, transportId!!, JSONObject().put("type", "CONNECT"))
         sendMedia(request("GET_STATUS"))
@@ -305,6 +351,7 @@ internal class CastConnection(
         private const val CONNECT_TIMEOUT_MS = 5_000
         private const val READ_TIMEOUT_MS = 30_000
         private const val HEARTBEAT_MS = 5_000L
+        private const val LAUNCH_STOP_WAIT_MS = 3_000L
         private const val MAX_MESSAGE_BYTES = 64 * 1024
     }
 }

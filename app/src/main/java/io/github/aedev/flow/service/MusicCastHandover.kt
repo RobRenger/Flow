@@ -40,14 +40,16 @@ internal class MusicCastHandover(
     }
 
     fun release() {
-        castPlayer?.release()
+        val cast = castPlayer ?: return
         castPlayer = null
+        cast.release()
+        StreamProxyServer.getInstance().stop(StreamProxyServer.HOLDER_CAST)
     }
 
     private fun toCast(device: CastDevice) {
         if (castPlayer?.device == device) return
         toPhone()
-        StreamProxyServer.getInstance().start(context)
+        StreamProxyServer.getInstance().start(context, StreamProxyServer.HOLDER_CAST)
 
         val items = (0 until localPlayer.mediaItemCount).map(localPlayer::getMediaItemAt)
         val wasPlaying = localPlayer.playWhenReady
@@ -90,6 +92,7 @@ internal class MusicCastHandover(
         // Stopping the cast leaves the music paused rather than suddenly playing from the phone.
         localPlayer.pause()
         cast.release()
+        StreamProxyServer.getInstance().stop(StreamProxyServer.HOLDER_CAST)
         Log.i(TAG, "Casting to ${cast.device.name} ended")
     }
 

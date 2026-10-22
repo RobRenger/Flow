@@ -1389,6 +1389,13 @@ class Media3MusicService : MediaLibraryService() {
         lockReleaseJob?.cancel()
         lockReleaseJob = null
 
+        // The phone's player sits paused while a speaker plays. CastPlayer takes its own locks,
+        // and only while the speaker plays, so the service holds none and keeps running.
+        if (castHandover?.isCasting == true) {
+            releaseLocks()
+            return
+        }
+
         if (isPlaybackActive) {
             acquireLocks()
             return

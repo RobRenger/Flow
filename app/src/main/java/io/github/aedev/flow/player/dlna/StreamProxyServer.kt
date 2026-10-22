@@ -15,6 +15,7 @@ import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
+import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -63,6 +64,19 @@ class StreamProxyServer private constructor() {
                 else -> "mp4"
             }
 
+        /** Holder names for [start] and [stop]: DLNA casting and Cast speakers share the proxy. */
+        const val HOLDER_DLNA = "dlna"
+        const val HOLDER_CAST = "cast"
+
+        private val random = SecureRandom()
+
+        /** 128 random bits, so a path seen on the LAN cannot be used to guess another. */
+        internal fun randomPathId(): String {
+            val bytes = ByteArray(16)
+            random.nextBytes(bytes)
+            return bytes.joinToString("") { "%02x".format(it) }
+        }
+
         @Volatile
         private var instance: StreamProxyServer? = null
 
@@ -103,11 +117,17 @@ class StreamProxyServer private constructor() {
 
     private val hlsPlaylists = ConcurrentHashMap<String, String>()
 
+    private val holders = ConcurrentHashMap.newKeySet<String>()
+
     /**
      * Starts the proxy server on a random available port.
      * Must be called before registerStream().
      */
-    fun start(context: Context) {
+    fun start(
+        context: Context,
+        holder: String = HOLDER_DLNA,
+    ) {
+        holders.add(holder)
         if (isRunning.get()) return
 
         localAddress = getDeviceIpAddress(context)
@@ -144,9 +164,12 @@ class StreamProxyServer private constructor() {
     fun isStarted(): Boolean = isRunning.get()
 
     /**
-     * Stops the proxy server and clears all registered streams.
+     * Releases [holder]'s use of the proxy. Once no one uses it, stops the server and clears all
+     * registered streams, so no LAN path outlives the cast that handed it out.
      */
-    fun stop() {
+    fun stop(holder: String = HOLDER_DLNA) {
+        holders.remove(holder)
+        if (holders.isNotEmpty()) return
         isRunning.set(false)
         streams.clear()
         hlsPlaylists.clear()
@@ -176,11 +199,7 @@ class StreamProxyServer private constructor() {
             return realUrl
         }
 
-        val pathId =
-            java.util.UUID
-                .randomUUID()
-                .toString()
-                .take(8)
+        val pathId = randomPathId()
         val path = "/s/$pathId.${segmentFileExtension(contentType)}"
 
         val contentLength = probeContentLength(realUrl)
@@ -218,11 +237,7 @@ class StreamProxyServer private constructor() {
             return videoVariants.firstOrNull()?.url ?: ""
         }
 
-        val sessionId =
-            java.util.UUID
-                .randomUUID()
-                .toString()
-                .take(8)
+        val sessionId = randomPathId()
         val durationSec = if (durationSeconds > 0) durationSeconds else 7200
         val targetDuration = durationSec + 1
 
