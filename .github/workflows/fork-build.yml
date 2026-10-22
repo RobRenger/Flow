@@ -4,6 +4,7 @@ name: Fork build
 on:
   push:
     branches: [ chromecast ]
+    paths-ignore: [ 'README-fork.md' ]
   workflow_dispatch:
 
 concurrency:
